@@ -1,3 +1,4 @@
+---
 git_user: git
 gitea_version: 1.22.3
 gitea_db_type: sqlite3
@@ -7,9 +8,9 @@ gitea_db_name: gitea
 gitea_db_user: gitea
 gitea_db_root_pass: gitea
 gitea_db_pass: gitea
-gitea_dir: '{{ git_home }}/gitea'
+gitea_dir: "{{ git_home }}/gitea"
 gitea_http_port: 3000
-db_dir: '{{ git_home }}/{{ gitea_db_type }}'
+db_dir: "{{ git_home }}/{{ gitea_db_type }}"
 docker_buildx_version: 0.18.0
 docker_compose_version: 2.30.3
 purge_data: false

@@ -1,9 +1,9 @@
 ---
 - name: Uninstall gitea
   hosts:
-    - vmbox
+    - giteabox
   tasks:
     - name: Run role
       ansible.builtin.include_role:
-        name: giteadockerrootless
+        name: gitea_docker_rootless
         tasks_from: uninstall

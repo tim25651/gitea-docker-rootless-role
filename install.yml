@@ -1,8 +1,8 @@
 ---
 - name: Install Gitea in Docker rootless
   hosts:
-    - vmbox
+    - giteabox
   tasks:
     - name: Run role
       ansible.builtin.include_role:
-        name: giteadockerrootless
+        name: gitea_docker_rootless
