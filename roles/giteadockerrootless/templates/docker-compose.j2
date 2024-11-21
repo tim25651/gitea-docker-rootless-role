@@ -1,0 +1,84 @@
+version: "3"
+
+networks:
+  gitea:
+    external: false
+
+services:
+  server:
+    image: gitea/gitea:{{ gitea_version }}
+    environment:
+      - USER={{ git_user }}
+      - USER_UID={{ git_user_id }}
+      - USER_GID={{ git_group_id }}
+{% if gitea_db_type in ["mysql", "postgres"] %}
+      - GITEA__database__DB_TYPE={{ gitea_db_type }}
+      - GITEA__database__HOST=db:{{ gitea_db_port }}
+      - GITEA__database__NAME={{ gitea_db_name }}
+      - GITEA__database__USER={{ gitea_db_user }}
+      - GITEA__database__PASSWD={{ gitea_db_pass }}
+{% endif %}
+    restart: always
+    networks:
+      - gitea
+    volumes:
+      - sync-ssh:/data/git/.ssh
+      - {{ gitea_dir }}:/data
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "{{ gitea_http_port }}:3000"
+      - "127.0.0.1:2222:22"
+    depends_on:
+      - syncer
+{% if gitea_db_type in ["mysql", "postgres"] %}
+      - db
+{% endif %}
+
+{% if gitea_db_type == "mysql" %}
+  db:
+    image: mysql:8
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD={{ gitea_db_root_pass }}
+      - MYSQL_DATABASE={{ gitea_db_name }}
+      - MYSQL_USER={{ gitea_db_user }}
+      - MYSQL_PASSWORD={{ gitea_db_pass }}
+    volumes:
+      - {{ db_dir }}:/var/lib/mysql
+    networks:
+      - gitea
+{% elif gitea_db_type == "postgres" %}
+  db:
+    image: postgres:14
+    restart: always
+    environment:
+      - POSTGRES_DB={{ gitea_db_name }}
+      - POSTGRES_USER={{ gitea_db_user }}
+      - POSTGRES_PASSWORD={{ gitea_db_pass }}
+    volumes:
+      - {{ db_dir }}:/var/lib/postgresql/data
+    networks:
+      - gitea
+{% endif %}
+
+  syncer:
+    image: syncer
+    container_name: syncer
+    environment:
+      - USER_UID={{ git_user_id }}
+      - USER_GID={{ git_group_id }}
+    restart: always
+    volumes:
+      - {{ git_home }}/.ssh:/source
+      - sync-ssh:/destination
+    networks:
+      - gitea
+
+volumes:
+  sync-ssh:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid={{ git_user_id }},gid={{ git_group_id }},mode=700

@@ -1,0 +1,86 @@
+{
+  "$ref": "#/$defs/GiteaDockerRootlessConfig",
+  "$defs": {
+    "GiteaDockerRootlessConfig": {
+      "title": "GiteaDockerRootlessConfig",
+      "description": "Configuration for Gitea Docker Rootless Ansible role.",
+      "type": "object",
+      "properties": {
+        "git_user": {
+          "type": "string",
+          "default": "git"
+        },
+        "gitea_version": {
+          "type": "string",
+          "pattern": "^(0|[1-9])[0-9]*\\.(0|[1-9])[0-9]*\\.(0|[1-9])[0-9]*$",
+          "default": "1.22.3"
+        },
+        "gitea_db_type": {
+          "enum": [
+            "mysql",
+            "postgres",
+            "sqlite3"
+          ],
+          "default": "sqlite3"
+        },
+        "gitea_db_host": {
+          "type": "string",
+          "default": "localhost"
+        },
+        "gitea_db_port": {
+          "type": "integer",
+          "default": 3306
+        },
+        "gitea_db_name": {
+          "type": "string",
+          "default": "gitea"
+        },
+        "gitea_db_user": {
+          "type": "string",
+          "default": "gitea"
+        },
+        "gitea_db_root_pass": {
+          "type": "string",
+          "default": "gitea"
+        },
+        "gitea_db_pass": {
+          "type": "string",
+          "default": "gitea"
+        },
+        "gitea_dir": {
+          "type": "string",
+          "default": "{{ git_home }}/gitea"
+        },
+        "gitea_http_port": {
+          "type": "integer",
+          "default": 3000
+        },
+        "db_dir": {
+          "type": "string",
+          "default": "{{ git_home }}/{{ gitea_db_type }}"
+        },
+        "docker_buildx_version": {
+          "type": "string",
+          "default": "0.18.0"
+        },
+        "docker_compose_version": {
+          "type": "string",
+          "default": "2.30.3"
+        },
+        "purge_data": {
+          "type": "boolean",
+          "default": false
+        },
+        "purge_docker": {
+          "type": "boolean",
+          "default": true
+        },
+        "remove_user": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": []
+    }
+  }
+}

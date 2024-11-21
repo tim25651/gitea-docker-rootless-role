@@ -1,0 +1,257 @@
+---
+- name: Set adjusted arch
+  ansible.builtin.set_fact:
+    adjusted_architecture: "{{ {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(ansible_architecture, ansible_architecture) }}"
+- name: Create user
+  become: true
+  ansible.builtin.user:
+    name: "{{ git_user }}"
+    state: present
+    shell: /bin/bash
+    create_home: true
+    home: "/home/{{ git_user }}"
+- name: Check if lingering is enabled
+  ansible.builtin.command: loginctl show-user {{ git_user }} --property=Linger
+  register: lingering
+  changed_when: false
+  failed_when: false
+- name: Enable linger
+  become: true
+  ansible.builtin.command: loginctl enable-linger {{ git_user }}
+  when: lingering.rc != 0
+  changed_when: true
+- name: Get user id and group id and git home
+  block:
+    - name: Get user id
+      ansible.builtin.command: id -u {{ git_user }}
+      register: git_user_id_command
+      changed_when: false
+    - name: Get group id
+      ansible.builtin.command: id -g {{ git_user }}
+      register: git_group_id_command
+      changed_when: false
+    - name: Set them as facts
+      ansible.builtin.set_fact:
+        git_user_id: "{{ git_user_id_command.stdout }}"
+        git_group_id: "{{ git_group_id_command.stdout }}"
+        git_home: "/home/{{ git_user }}"
+- name: Set docker-vars fact
+  ansible.builtin.set_fact:
+    docker_vars: |
+      PATH={{ git_home }}/bin:$PATH \
+      DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock \
+      DOCKER_CONFIG={{ git_home }}/.docker \
+      XDG_RUNTIME_DIR=/run/user/$(id -u) \
+- name: Install dependencies
+  become: true
+  ansible.builtin.package:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - "uidmap"
+    - "slirp4netns"
+    - "fuse-overlayfs"
+- name: Check if docker exists
+  become: true
+  become_user: "{{ git_user }}"
+  ansible.builtin.shell: |
+    {{ docker_vars }} docker --version
+  register: docker_exists
+  changed_when: false
+  failed_when: false
+- name: Install docker rootless
+  when: docker_exists.rc != 0
+  block:
+    - name: Stop existing user service docker
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.systemd:
+        name: docker
+        state: stopped
+        enabled: false
+        scope: user
+      failed_when: false
+    - name: Remove dockerd
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.file:
+        path: "{{ git_home }}/bin/dockerd"
+        state: absent
+    - name: Create temporary directory
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: docker
+      register: docker_dir
+    - name: Pull docker install script
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.get_url:
+        url: "https://get.docker.com/rootless"
+        dest: "{{ docker_dir.path }}/docker-install.sh"
+        mode: "0755"
+      changed_when: false
+    - name: Run docker install script
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.shell: |
+        {{ docker_vars }} {{ docker_dir.path }}/docker-install.sh
+      changed_when: true
+    - name: Test docker
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.shell: |
+        {{ docker_vars }} docker run --rm hello-world && {{ docker_vars }} docker rmi hello-world
+      changed_when: true
+- name: Edit profile
+  become: true
+  ansible.builtin.blockinfile:
+    prepend_newline: true
+    append_newline: true
+    content: |
+      export PATH={{ git_home }}/bin:$PATH
+      export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock
+      export DOCKER_CONFIG={{ git_home }}/.docker
+      export XDG_RUNTIME_DIR=/run/user/$(id -u)
+    path: "{{ git_home }}/.bashrc"
+- name: Start docker service
+  become: true
+  become_user: "{{ git_user }}"
+  ansible.builtin.systemd:
+    name: docker
+    state: started
+    enabled: true
+    scope: user
+- name: Create gitea directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ gitea_dir }}"
+    state: directory
+    owner: "{{ git_user_id }}"
+    group: "{{ git_user_id }}"
+    mode: "0755"
+- name: Create db directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ db_dir }}"
+    state: directory
+    owner: "{{ git_user_id }}"
+    group: "{{ git_user_id }}"
+    mode: "0755"
+  when: gitea_db_type in ['mysql', 'postgres']
+- name: Create docker-compose
+  become: true
+  ansible.builtin.template:
+    src: docker-compose.j2
+    dest: /home/git/docker-compose.yml
+    owner: "{{ git_user_id }}"
+    group: "{{ git_group_id }}"
+    mode: "0644"
+- name: Create cli-plugins directory
+  become: true
+  ansible.builtin.file:
+    path: "{{ git_home }}/.docker/cli-plugins"
+    state: directory
+    owner: "{{ git_user_id }}"
+    group: "{{ git_group_id }}"
+    mode: "0755"
+- name: Install docker plugins
+  become: true
+  ansible.builtin.get_url:
+    url: "{{ item.url }}"
+    dest: "{{ git_home }}/.docker/cli-plugins/{{ item.plugin }}"
+    owner: "{{ git_user_id }}"
+    group: "{{ git_group_id }}"
+    mode: "0755"
+  loop:
+    - url: "https://github.com/docker/compose/releases/download/v{{ docker_compose_version }}/docker-compose-linux-{{ ansible_architecture }}"
+      plugin: docker-compose
+    - url: "https://github.com/docker/buildx/releases/download/v{{ docker_buildx_version }}/buildx-v{{ docker_buildx_version }}.linux-{{ adjusted_architecture }}"
+      plugin: docker-buildx
+- name: Check if syncer exists
+  become: true
+  become_user: "{{ git_user }}"
+  ansible.builtin.shell: |
+    {{ docker_vars }} docker image inspect syncer &> /dev/null
+  register: syncer_exists
+  changed_when: false
+  ignore_errors: true
+- name: Build syncer
+  when: syncer_exists.stderr.find('No such image') != -1
+  block:
+    - name: Clone syncer
+      become: true
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: syncer
+      register: syncer_dir
+    - name: Adjust permissions of syncer directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ syncer_dir.path }}"
+        state: directory
+        owner: "{{ git_user_id }}"
+        group: "{{ git_group_id }}"
+        mode: "0755"
+    - name: Copy Dockerfile
+      become: true
+      ansible.builtin.copy:
+        src: Dockerfile
+        dest: "{{ syncer_dir.path }}/Dockerfile"
+        owner: "{{ git_user_id }}"
+        group: "{{ git_group_id }}"
+        mode: "0644"
+    - name: Copy entrypoint
+      become: true
+      ansible.builtin.copy:
+        src: entrypoint.sh
+        dest: "{{ syncer_dir.path }}/entrypoint.sh"
+        owner: "{{ git_user_id }}"
+        group: "{{ git_group_id }}"
+        mode: "0755"
+    - name: Build syncer
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.shell: |
+        {{ docker_vars }} docker build -t syncer {{ syncer_dir.path }}
+      changed_when: true
+- name: Check if authorized_keys exists
+  become: true
+  become_user: "{{ git_user }}"
+  ansible.builtin.stat:
+    path: "{{ git_home }}/.ssh/authorized_keys"
+  register: authorized_keys
+- name: Create .ssh directory
+  become: true
+  become_user: "{{ git_user }}"
+  ansible.builtin.file:
+    path: "{{ git_home }}/.ssh"
+    state: directory
+    owner: "{{ git_user_id }}"
+    group: "{{ git_group_id }}"
+    mode: "0700"
+- name: Create Gitea Host Key to authorized_keys
+  become: true
+  become_user: "{{ git_user }}"
+  ansible.builtin.shell: |
+    ssh-keygen -t ed25519 -f {{ git_home }}/.ssh/id_ed25519 -N "" -C "Gitea Host Key"
+    cat {{ git_home }}/.ssh/id_ed25519.pub >> {{ git_home }}/.ssh/authorized_keys
+    chmod 0600 {{ git_home }}/.ssh/authorized_keys
+  when: not authorized_keys.stat.exists
+  changed_when: true
+- name: Start docker-compose
+  become: true
+  become_user: "{{ git_user }}"
+  ansible.builtin.shell: |
+    {{ docker_vars }} docker compose -f {{ git_home }}/docker-compose.yml up -d
+  args:
+    executable: /bin/bash
+- name: Create ssh shim
+  become: true
+  ansible.builtin.copy:
+    src: gitea
+    dest: /usr/local/bin/gitea
+    owner: root
+    group: root
+    mode: "0755"

@@ -1,0 +1,123 @@
+---
+- name: Remove user
+  become: true
+  when: remove_user
+  block:
+    - name: Check if lingering is enabled
+      ansible.builtin.command: loginctl show-user {{ git_user }} --property=Linger
+      register: lingering
+      changed_when: false
+      failed_when: false
+    - name: Disable lingering
+      ansible.builtin.command: loginctl disable-linger {{ git_user }}
+      when: lingering.stdout == "Linger=yes"
+      changed_when: true
+    - name: Remove user
+      ansible.builtin.user:
+        name: "{{ git_user }}"
+        state: absent
+        remove: true
+- name: Check if user exists
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ git_user }}"
+  register: git_user_msg
+  failed_when: false
+- name: Set user exists fact
+  ansible.builtin.set_fact:
+    git_user_exists: "{{ git_user_msg.msg | default('') != 'One or more supplied key could not be found in the database.' }}"
+- name: Get user id and group id and git home
+  when: git_user_exists
+  block:
+    - name: Get user id
+      ansible.builtin.command: id -u {{ git_user }}
+      register: git_user_id_command
+      changed_when: false
+    - name: Get group id
+      ansible.builtin.command: id -g {{ git_user }}
+      register: git_group_id_command
+      changed_when: false
+    - name: Set them as facts
+      ansible.builtin.set_fact:
+        git_user_id: "{{ git_user_id_command.stdout }}"
+        git_group_id: "{{ git_group_id_command.stdout }}"
+        git_home: "/home/{{ git_user }}"
+- name: Set docker-vars fact
+  when: git_user_exists
+  ansible.builtin.set_fact:
+    docker_vars: |
+      PATH={{ git_home }}/bin:$PATH \
+      DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock \
+      DOCKER_CONFIG={{ git_home }}/.docker \
+      XDG_RUNTIME_DIR=/run/user/$(id -u) \
+- name: Remove gitea
+  when: git_user_exists
+  block:
+    - name: Check if docker exists
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.shell: |
+        {{ docker_vars }} docker --version
+      register: docker_exists
+      changed_when: false
+      failed_when: false
+    - name: Check if something is running
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.shell: |
+        {{ docker_vars }} docker ps -q
+      register: docker_ps
+      changed_when: false
+      when: docker_exists.rc == 0
+    - name: Set docker_ps fact
+      when: docker_exists.rc != 0
+      ansible.builtin.set_fact:
+        docker_ps: { stdout: "" }
+    - name: Stop containers
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.shell: |
+        {{ docker_vars }} docker stop {{ docker_ps.stdout_lines | join(" ") }}
+      when: docker_ps.stdout != ""
+      changed_when: true
+    - name: Purge docker
+      become: true
+      become_user: "{{ git_user }}"
+      ansible.builtin.shell: |
+        {{ docker_vars }} docker system prune -a --volumes -f
+      args:
+        executable: /bin/bash
+      register: purge_docker_result
+      when: docker_exists.rc == 0 and purge_docker
+      changed_when: "purge_docker_result.stdout != 'Total reclaimed space: 0B'"
+    - name: Remove docker-compose
+      become: true
+      ansible.builtin.file:
+        path: "{{ git_home }}/docker-compose.yml"
+        state: absent
+    - name: Check if authorized_keys exists
+      become: true
+      ansible.builtin.stat:
+        path: "{{ git_home }}/.ssh/authorized_keys"
+      register: authorized_keys
+    - name: Remove lines from .ssh/authorized_keys starting with command=
+      become: true
+      ansible.builtin.replace:
+        path: "{{ git_home }}/.ssh/authorized_keys"
+        regexp: '^command="(.*)"'
+        replace: ""
+      when: authorized_keys.stat.exists
+    - name: Remove data directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ gitea_data_dir }}"
+        - "{{ db_dir }}"
+      when: purge_data
+- name: Remove gitea script
+  become: true
+  ansible.builtin.file:
+    path: "/usr/local/bin/gitea"
+    state: "absent"
