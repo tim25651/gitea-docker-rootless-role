@@ -74,6 +74,7 @@ services:
       - sync-ssh:/destination
     networks:
       - gitea
+    stop_grace_period: 1s
 
 volumes:
   sync-ssh:
